@@ -1,0 +1,1 @@
+"""Electrical hazard assessment interfaces."""
