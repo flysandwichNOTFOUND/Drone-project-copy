@@ -10,7 +10,7 @@ import numpy as np
 from drone_sim.physics.dynamics import DroneState
 from drone_sim.configuration.project_paths import OUTPUT_DIRECTORY
 from drone_sim.validation import positive, vector
-from drone_sim.world.terrain import FlatTerrain
+from drone_sim.world.terrain import FlatTerrain, RoomTerrain
 
 
 @contextmanager
@@ -307,6 +307,11 @@ class GymPyBulletDrone:
         p = self._p
         p.removeBody(self.env.PLANE_ID, physicsClientId = self.client_id)
 
+        self.wall_body_ids = []
+        if isinstance(self.terrain, RoomTerrain):
+            self._create_room()
+            return
+
         if type(self.terrain) is FlatTerrain:
             shape = p.createCollisionShape(p.GEOM_PLANE, physicsClientId = self.client_id)
             origin = [0, 0, float(self.terrain.height(0, 0))]
@@ -344,6 +349,33 @@ class GymPyBulletDrone:
 
         self.terrain_body_id = p.createMultiBody(baseMass = 0, baseCollisionShapeIndex = shape, basePosition = origin, physicsClientId = self.client_id)
 
+        self.env.PLANE_ID = self.terrain_body_id
+
+    def _create_room(self):
+        """Create a visible floor and four static, collidable room walls."""
+        p, room = self._p, self.terrain
+
+        def box(centre, half_extents, colour):
+            collision = p.createCollisionShape(
+                p.GEOM_BOX, halfExtents = half_extents, physicsClientId = self.client_id)
+            visual = p.createVisualShape(
+                p.GEOM_BOX, halfExtents = half_extents, rgbaColor = colour,
+                physicsClientId = self.client_id)
+            return p.createMultiBody(
+                baseMass = 0, baseCollisionShapeIndex = collision,
+                baseVisualShapeIndex = visual, basePosition = centre,
+                physicsClientId = self.client_id)
+
+        floor_half_height = 0.1
+        self.terrain_body_id = box(
+            (0, 0, room.base_height - floor_half_height),
+            (room.width / 2 + room.wall_thickness,
+             room.length / 2 + room.wall_thickness, floor_half_height),
+            (0.65, 0.65, 0.65, 1.0))
+        self.wall_body_ids = [box(centre, half_extents, (0.85, 0.88, 0.92, 1.0))
+                              for centre, half_extents in room.wall_boxes()]
+        self.pillar_body_ids = [box(centre, half_extents, (0.4, 0.4, 0.45, 1.0))
+                               for centre, half_extents in room.pillar_boxes()]
         self.env.PLANE_ID = self.terrain_body_id
 
 

@@ -2,7 +2,10 @@ import numpy as np
 from drone_sim.configuration.project_paths import output_path
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, LightSource
-from matplotlib.patches import Patch
+from matplotlib.patches import Patch, Rectangle
+from drone_sim.physics.collision_check import CollisionCheck
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from drone_sim.world.terrain import RoomTerrain
 
 # Terrain preview and wider scale for the 3D graph (metres).
 TERRAIN_PLOT_SPAN = 16.0
@@ -167,10 +170,46 @@ def plot_data(simulation_data, *, show = True):
 
     return figure
 
+def _room_safety_rectangles(terrain, simulation_data):
+    """Non-overlapping red and yellow rectangular strips inside room walls."""
+    minimum = float(simulation_data.get("minimum_safe_distance", terrain.minimum_safe_distance))
+    if not np.isfinite(minimum) or minimum <= 0:
+        raise ValueError("Minimum wall distance must be finite and positive.")
+    xmin, xmax, ymin, ymax = terrain.plot_bounds
+
+    def ring(inset, thickness, bounds = None):
+        left, right, bottom, top = terrain.plot_bounds if bounds is None else bounds
+        x0, x1, y0, y1 = left + inset, right - inset, bottom + inset, top - inset
+        width, length = x1 - x0, y1 - y0
+        if width <= 0 or length <= 0:
+            return []
+        depth = min(thickness, width / 2, length / 2)
+        rectangles = [(x0, y0, width, depth), (x0, y1 - depth, width, depth)]
+        if length > 2 * depth:
+            rectangles.extend([(x0, y0 + depth, depth, length - 2 * depth),
+                               (x1 - depth, y0 + depth, depth, length - 2 * depth)])
+        return rectangles
+
+    red, yellow = ring(0, minimum), ring(minimum, CollisionCheck.SLOWDOWN_THRESHOLD)
+    for centre, half_extents in terrain.pillar_boxes():
+        x, y, _ = centre
+        hx, hy, _ = half_extents
+        red.extend(ring(0, minimum, (x - hx - minimum, x + hx + minimum,
+                                    y - hy - minimum, y + hy + minimum)))
+        outer = minimum + CollisionCheck.SLOWDOWN_THRESHOLD
+        yellow.extend(ring(0, CollisionCheck.SLOWDOWN_THRESHOLD,
+                           (x - hx - outer, x + hx + outer,
+                            y - hy - outer, y + hy + outer)))
+    return [("red", red, f"Unsafe: within {minimum:g} m of walls/objects"),
+            ("yellow", yellow,
+             f"Slow down: next {CollisionCheck.SLOWDOWN_THRESHOLD:g} m")]
+
+
 def plot_3d_trajectory(simulation_data, *, show = True):
 
     ground_height = simulation_data["ground_height"]
     terrain = simulation_data["terrain"]
+    is_room = isinstance(terrain, RoomTerrain)
     positions = np.asarray(simulation_data["position"], dtype = float)
     waypoints = np.asarray(simulation_data["waypoints"], dtype = float)
 
@@ -194,6 +233,8 @@ def plot_3d_trajectory(simulation_data, *, show = True):
     upper = map_points.max(axis = 0)
     center = (lower + upper) / 2.0
     span = max(TERRAIN_PLOT_SPAN, float(np.max(upper - lower)) * (1.0 if hasattr(terrain, "plot_bounds") else 1.3))
+    if is_room:
+        span = max(terrain.width, terrain.length) * 1.05
     x_limits = (center[0] - span / 2, center[0] + span / 2)
     y_limits = (center[1] - span / 2, center[1] + span / 2)
     terrain_x, terrain_y = np.meshgrid( np.linspace(*x_limits, 220), np.linspace(*y_limits, 220))
@@ -204,7 +245,36 @@ def plot_3d_trajectory(simulation_data, *, show = True):
         dx = span / 219, dy = span / 219,
         vmin = float(np.min(terrain_z)),
         vmax = max(float(np.max(terrain_z)), float(np.min(terrain_z)) + 0.01))
+    if is_room:
+        colors[..., :3] = 0.94
     ax.plot_surface(terrain_x, terrain_y, terrain_z, facecolors = colors, linewidth = 0, antialiased = False, shade = False, rcount = 220, ccount = 220, zorder = 1)
+
+    if is_room:
+        xmin, xmax, ymin, ymax = terrain.plot_bounds
+        floor, top = terrain.base_height, terrain.base_height + terrain.wall_height
+        corners = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
+        faces = [[(a[0], a[1], floor), (b[0], b[1], floor),
+                  (b[0], b[1], top), (a[0], a[1], top)]
+                 for a, b in zip(corners, corners[1:] + corners[:1])]
+        ax.add_collection3d(Poly3DCollection(
+            faces, facecolors = "lightsteelblue", edgecolors = "slategrey", alpha = 0.2))
+        for centre, half_extents in terrain.pillar_boxes():
+            x, y, z = centre
+            hx, hy, hz = half_extents
+            bottom = [(x - hx, y - hy, z - hz), (x + hx, y - hy, z - hz),
+                      (x + hx, y + hy, z - hz), (x - hx, y + hy, z - hz)]
+            top_face = [(vx, vy, z + hz) for vx, vy, _ in bottom]
+            pillar_faces = [top_face] + [[bottom[i], bottom[(i + 1) % 4],
+                top_face[(i + 1) % 4], top_face[i]] for i in range(4)]
+            ax.add_collection3d(Poly3DCollection(
+                pillar_faces, facecolors = "dimgray", edgecolors = "black", zorder = 2.5))
+        for colour, rectangles, _ in _room_safety_rectangles(terrain, simulation_data):
+            z = floor + 0.005
+            zones = [[(x, y, z), (x + w, y, z), (x + w, y + h, z), (x, y + h, z)]
+                     for x, y, w, h in rectangles]
+            if zones:
+                ax.add_collection3d(Poly3DCollection(
+                    zones, facecolors = colour, edgecolors = "none", alpha = 0.2, zorder = 2))
 
     ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], color = "tab:blue", label = "Actual trajectory")
     adapted = simulation_data.get("landing_mode") == "safe_nearby"
@@ -223,18 +293,27 @@ def plot_3d_trajectory(simulation_data, *, show = True):
     ax.set_xlabel("X position (m)")
     ax.set_ylabel("Y position (m)")
     ax.set_zlabel("Height (m)")
-    ax.set_title("Drone Trajectory over Terrain")
+    ax.set_title("Drone Trajectory in Room" if is_room else "Drone Trajectory over Terrain")
     ax.set_xlim(*x_limits)
     ax.set_ylim(*y_limits)
     z_lower = min(float(np.min(terrain_z)), float(all_points[:, 2].min()))
     z_upper = max(ground_height + 6.0, float(all_points[:, 2].max()) + 1.0, float(np.max(terrain_z)) + 1.0)
+    if is_room:
+        z_upper = max(z_upper, terrain.base_height + terrain.wall_height + 0.5)
     ax.set_zlim(z_lower, z_upper)
     # Match the axes' physical spans so terrain and flight retain their proportions.
     ax.set_box_aspect((span, span, z_upper - z_lower))
     ax.view_init(elev = 28, azim = -60)
 
     handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles + [Patch(facecolor = "olivedrab", alpha = 0.85)], labels + ["Terrain"], loc = "upper left", fontsize = 8)
+    ax.legend(handles + [Patch(facecolor = "lightsteelblue" if is_room else "olivedrab", alpha = 0.85)], labels + ["Room (4 m walls)" if is_room else "Terrain"], loc = "upper left", fontsize = 8)
+    if is_room:
+        zone_handles = [Patch(facecolor = colour, alpha = 0.2, label = label)
+                        for colour, _, label in _room_safety_rectangles(terrain, simulation_data)]
+        zone_handles.append(Patch(facecolor = "dimgray", label = "Pillar"))
+        ax.legend(handles = handles + [Patch(facecolor = "lightsteelblue", alpha = 0.2,
+                                   label = "Room (4 m walls)")] + zone_handles,
+                  loc = "upper left", fontsize = 8)
     plt.tight_layout(rect = (0, 0, 1, 0.92))
     plt.savefig(output_path("drone_3d_trajectory.png"), dpi = 300)
 
@@ -277,6 +356,19 @@ def plot_2d_trajectory(simulation_data, *, show = True):
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
         ax.set_aspect("equal", adjustable = "box")
+        if isinstance(terrain, RoomTerrain):
+            for centre, half_extents in terrain.pillar_boxes():
+                x, y, _ = centre
+                hx, hy, _ = half_extents
+                ax.add_patch(Rectangle((x - hx, y - hy), 2 * hx, 2 * hy,
+                    facecolor = "dimgray", edgecolor = "black", label = "Pillar", zorder = 1))
+            for colour, rectangles, label in _room_safety_rectangles(terrain, simulation_data):
+                for index, (x, y, width, height) in enumerate(rectangles):
+                    ax.add_patch(Rectangle(
+                        (x, y), width, height, facecolor = colour, edgecolor = "none",
+                        alpha = 0.2, zorder = 0.5, label = label if index == 0 else None))
+            ax.plot([xmin, xmax, xmax, xmin, xmin], [ymin, ymin, ymax, ymax, ymin],
+                    color = "slategrey", linewidth = 3, label = "Room walls")
 
     ax.grid(True)
     ax.legend(fontsize = 8)

@@ -1,6 +1,4 @@
-from functools import lru_cache
 import numpy as np
-from drone_sim.configuration.parameters import TERRAIN_BOUNDS
 from drone_sim.validation import positive, vector
 
 
@@ -81,105 +79,90 @@ class SlopedTerrain(FlatTerrain):
         return max(float(self.height(*start)), float(self.height(*goal)))
 
 
-class LandscapeTerrain(FlatTerrain):
-    """Seeded library Perlin layers sampled onto a cached 200 m height map.
+class RoomTerrain(FlatTerrain):
+    """Flat floor with a rectangular, open-top enclosure.
 
-    Height and slope queries use the same bilinear surface. Gym approximates
-    this surface with triangles at its configured collision-mesh resolution.
+    Width/length measure the clear interior; wall thickness extends outward.
+    Floor elevation stays separate from the vertical wall collision geometry.
     """
-    plot_bounds = TERRAIN_BOUNDS
 
-    def __init__(self, base_height = 0.0, seed = 17):
-
-        from drone_sim.configuration import parameters
-
+    def __init__(self, base_height = 0.0, width = 20.0, length = 20.0,
+                 wall_height = 4.0, wall_thickness = 0.2,
+                 pillar_center = (-2.5, 2.5), pillar_width = 0.5, pillar_height = 4.0,
+                 minimum_safe_distance = 1.0, route_margin = 0.1):
         super().__init__(base_height)
-        if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
-            raise ValueError("Terrain seed must be an integer.")
+        self.width = positive(width, "Room width")
+        self.length = positive(length, "Room length")
+        self.wall_height = positive(wall_height, "Wall height")
+        self.wall_thickness = positive(wall_thickness, "Wall thickness")
+        self.plot_bounds = (-self.width / 2, self.width / 2,
+                            -self.length / 2, self.length / 2)
+        self.pillar_center = vector(pillar_center, 2, "Pillar centre")
+        self.pillar_width = positive(pillar_width, "Pillar width")
+        self.pillar_height = positive(pillar_height, "Pillar height")
+        self.minimum_safe_distance = positive(minimum_safe_distance, "Minimum safe distance")
+        self.route_margin = positive(route_margin, "Route margin", allow_zero = True)
+        if np.any(np.abs(self.pillar_center) + self.pillar_width / 2
+                  >= np.array([self.width, self.length]) / 2):
+            raise ValueError("Pillar must fit inside the room.")
 
-        amplitude = positive(parameters.LANDSCAPE_HEIGHT, "Landscape height", allow_zero = True)
-        feature_size = positive(parameters.LANDSCAPE_FEATURE_SIZE, "Landscape feature size")
-        resolution = positive(parameters.LANDSCAPE_RESOLUTION, "Landscape resolution")
-        persistence = positive(parameters.LANDSCAPE_PERSISTENCE, "Landscape persistence")
-        lacunarity = positive(parameters.LANDSCAPE_LACUNARITY, "Landscape lacunarity")
-        octaves = parameters.LANDSCAPE_OCTAVES
+    def blocked_pillar_bounds(self, extra_clearance = 0.0):
+        """Pillar footprints expanded by the red zone and optional route margin."""
+        clearance = self.minimum_safe_distance + positive(
+            extra_clearance, "Extra clearance", allow_zero = True)
+        return [(x - hx - clearance, x + hx + clearance,
+                 y - hy - clearance, y + hy + clearance)
+                for (x, y, _), (hx, hy, _) in self.pillar_boxes()]
 
-        if isinstance(octaves, bool) or not isinstance(octaves, (int, np.integer)) or not 1 <= octaves <= 8:
-            raise ValueError("Landscape octaves must be an integer from 1 to 8.")
-        if persistence > 1 or lacunarity <= 1:
-            raise ValueError("Persistence must be at most 1 and lacunarity must exceed 1.")
+    def segment_xy_is_clear(self, start_xy, end_xy, extra_clearance = 0.0):
+        """Certify the entire segment stays outside closed red rectangles.
 
-        self._heights = _landscape_grid(int(seed), tuple(self.plot_bounds), amplitude, feature_size, int(octaves), persistence, lacunarity, resolution)
+        Walls bound a convex safe interior. Slab intersection tests reject
+        pillar-zone crossings, corner cutting and even boundary tangency.
+        These are horizontal no-go zones; climbing never bypasses them.
+        """
+        start = vector(start_xy, 2, "Segment start XY")
+        end = vector(end_xy, 2, "Segment end XY")
+        clearance = self.minimum_safe_distance + positive(
+            extra_clearance, "Extra clearance", allow_zero = True)
         xmin, xmax, ymin, ymax = self.plot_bounds
-        ny, nx = self._heights.shape
-        self._dx = (xmax - xmin) / (nx - 1)
-        self._dy = (ymax - ymin) / (ny - 1)
-        max_x_slope = np.max(np.abs(np.diff(self._heights, axis = 1))) / self._dx
-        max_y_slope = np.max(np.abs(np.diff(self._heights, axis = 0))) / self._dy
-        self.gradient_bound = float(np.hypot(max_x_slope, max_y_slope))
+        for point in (start, end):
+            if not (xmin + clearance < point[0] < xmax - clearance
+                    and ymin + clearance < point[1] < ymax - clearance):
+                return False
+        direction = end - start
+        for bounds in self.blocked_pillar_bounds(extra_clearance):
+            enter, leave = 0.0, 1.0
+            for axis, (lower, upper) in enumerate(((bounds[0], bounds[1]),
+                                                    (bounds[2], bounds[3]))):
+                if abs(direction[axis]) < 1e-14:
+                    if not lower <= start[axis] <= upper:
+                        break
+                else:
+                    first, last = sorted(((lower - start[axis]) / direction[axis],
+                                          (upper - start[axis]) / direction[axis]))
+                    enter, leave = max(enter, first), min(leave, last)
+                    if enter > leave:
+                        break
+            else:
+                return False  # Both axis intervals intersect the segment.
+        return True
 
-    def height(self, x, y):
+    def pillar_boxes(self):
+        """Return the pillar centre and half-extents for physics and plots."""
+        x, y = self.pillar_center
+        half_width, half_height = self.pillar_width / 2, self.pillar_height / 2
+        return (((x, y, self.base_height + half_height),
+                 (half_width, half_width, half_height)),)
 
-        x, y = np.broadcast_arrays(np.asarray(x, dtype = float), np.asarray(y, dtype = float))
-        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
-            raise ValueError("Terrain coordinates must be finite.")
-
-        xmin, xmax, ymin, ymax = self.plot_bounds
-        ny, nx = self._heights.shape
-        gx = (np.clip(x, xmin, xmax) - xmin) / self._dx
-        gy = (np.clip(y, ymin, ymax) - ymin) / self._dy
-        ix = np.minimum(gx.astype(int), nx - 2)
-        iy = np.minimum(gy.astype(int), ny - 2)
-        tx, ty = gx - ix, gy - iy
-        lower = (1 - tx) * self._heights[iy, ix] + tx * self._heights[iy, ix + 1]
-        upper = (1 - tx) * self._heights[iy + 1, ix] + tx * self._heights[iy + 1, ix + 1]
-        return self.base_height + (1 - ty) * lower + ty * upper
-
-    def gradient(self, x, y):
-
-        # Central differences average the two slopes at a grid boundary.
-        epsilon = 1e-5
-        dx = (self.height(x + epsilon, y) - self.height(x - epsilon, y)) / (2 * epsilon)
-        dy = (self.height(x, y + epsilon) - self.height(x, y - epsilon)) / (2 * epsilon)
-        return np.array([float(dx), float(dy)])
-
-    def maximum_height_along(self, start, goal):
-
-        start = vector(start, 2, "Segment start")
-        goal = vector(goal, 2, "Segment goal")
-        length = np.linalg.norm(goal - start)
-        segments = max(1, int(np.ceil(length / 0.15)))
-        points = start + np.linspace(0, 1, segments + 1)[:, None] * (goal - start)
-        # Bilinear slopes are bounded by adjacent sample differences, so this
-        # Lipschitz margin covers every peak between the segment samples.
-        return float(np.max(self.height(points[:, 0], points[:, 1]))) + self.gradient_bound * length / (2 * segments)
-
-
-@lru_cache(maxsize = 4)
-def _landscape_grid(seed, bounds, amplitude, feature_size, octaves, persistence, lacunarity, resolution):
-    """Build once per configuration; instances share a read-only elevation grid."""
-
-    from perlin_noise import PerlinNoise
-
-    xmin, xmax, ymin, ymax = bounds
-    nx = int(np.ceil((xmax - xmin) / resolution)) + 1
-    ny = int(np.ceil((ymax - ymin) / resolution)) + 1
-    if nx * ny > 250000:
-        raise ValueError("Landscape grid exceeds 250000 samples; increase resolution spacing.")
-
-    # The library treats seed=0 as random; map every project seed to a positive seed.
-    rng = np.random.default_rng(seed % (2**64))
-    offset = rng.uniform(10, 100, size = 2)
-    points = [(float(x / feature_size + offset[0]), float(y / feature_size + offset[1]))
-              for y in np.linspace(ymin, ymax, ny) for x in np.linspace(xmin, xmax, nx)]
-    heights = np.zeros(nx * ny)
-    weights = persistence**np.arange(octaves)
-
-    for layer, weight in enumerate(weights):
-        noise = PerlinNoise(octaves = lacunarity**layer, seed = int(rng.integers(1, 2**31)))
-        heights += weight * np.fromiter((noise(point) for point in points), dtype = float, count = len(points))
-
-    heights = (amplitude * heights / np.sum(weights)).reshape(ny, nx)
-    heights -= heights.min()  # The lowest sampled terrain is base_height.
-    heights.setflags(write = False)
-    return heights
+    def wall_boxes(self):
+        """Return (centre, half-extents) pairs for the four solid walls."""
+        x, y = self.width / 2, self.length / 2
+        t, h = self.wall_thickness / 2, self.wall_height / 2
+        z = self.base_height + h
+        return (
+            ((-x - t, 0, z), (t, y + 2 * t, h)),
+            ((x + t, 0, z), (t, y + 2 * t, h)),
+            ((0, -y - t, z), (x, t, h)),
+            ((0, y + t, z), (x, t, h)),
+        )

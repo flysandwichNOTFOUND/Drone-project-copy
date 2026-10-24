@@ -3,7 +3,7 @@ from itertools import count
 
 import numpy as np
 
-from drone_sim.world.terrain import FlatTerrain, SlopedTerrain
+from drone_sim.world.terrain import FlatTerrain, SlopedTerrain, RoomTerrain
 from drone_sim.validation import positive, vector
 
 
@@ -34,7 +34,9 @@ class AStarPathfinder:
         self.grid_resolution = grid_resolution
         self.minimum_flight_height = minimum_flight_height
         self.climb_weight = climb_weight
-        self.search_bounds = search_bounds
+        self.search_bounds = (terrain.plot_bounds
+                              if search_bounds is None and isinstance(terrain, RoomTerrain)
+                              else search_bounds)
         self.search_margin = search_margin
         self.maximum_altitude = maximum_altitude
         self.clearance_margin = clearance_margin
@@ -108,8 +110,14 @@ class AStarPathfinder:
 
         for point in [start, goal]:
             self._flight_position(point)
+            if not self._point_is_clear(point):
+                raise NoPathError("Start or goal is inside a red no-go zone or its route margin.")
 
         return start, goal
+
+    def _point_is_clear(self, xy):
+        return (not isinstance(self.terrain, RoomTerrain)
+                or self.terrain.segment_xy_is_clear(xy, xy, self.terrain.route_margin))
 
     def build_grid(self, start_xy, goal_xy):
         """Sample terrain and store a world position for each grid index.
@@ -149,10 +157,25 @@ class AStarPathfinder:
 
         x = np.linspace(low[0], high[0], nx)
         y = np.linspace(low[1], high[1], ny)
+        if isinstance(self.terrain, RoomTerrain):
+            # Include obstacle-offset coordinates so the route can trace just
+            # outside the red boundary rather than detouring a whole grid cell.
+            bounds = self.terrain.blocked_pillar_bounds(self.terrain.route_margin)
+            epsilon = 1e-6
+            extra_x = [start[0], goal[0]] + [value + sign * epsilon
+                for b in bounds for value, sign in ((b[0], -1), (b[1], 1))]
+            extra_y = [start[1], goal[1]] + [value + sign * epsilon
+                for b in bounds for value, sign in ((b[2], -1), (b[3], 1))]
+            x = np.unique(np.r_[x, [v for v in extra_x if low[0] <= v <= high[0]]])
+            y = np.unique(np.r_[y, [v for v in extra_y if low[1] <= v <= high[1]]])
+            if len(x) * len(y) > self.max_grid_nodes:
+                raise ValueError("Obstacle-aware grid exceeds max_grid_nodes.")
         positions = {"start": start_position, "goal": goal_position}
 
         for ix, px in enumerate(x):
             for iy, py in enumerate(y):
+                if not self._point_is_clear((px, py)):
+                    continue
                 position = self._flight_position((px, py))
 
                 if self.maximum_altitude is None or position[2] <= self.maximum_altitude:
@@ -233,6 +256,10 @@ class AStarPathfinder:
         start = vector(start_position, 3, "Segment start")
         end = vector(end_position, 3, "Segment end")
         tolerance = 1e-8
+
+        if isinstance(self.terrain, RoomTerrain) and not self.terrain.segment_xy_is_clear(
+                start[:2], end[:2], self.terrain.route_margin):
+            return False
 
         if min(start[2], end[2]) < self.minimum_flight_height - tolerance:
             return False

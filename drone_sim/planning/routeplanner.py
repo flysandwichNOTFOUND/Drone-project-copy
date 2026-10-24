@@ -1,6 +1,6 @@
 import numpy as np
-from drone_sim.world.terrain import FlatTerrain
-from drone_sim.planning.pathfinding import AStarPathfinder
+from drone_sim.world.terrain import FlatTerrain, RoomTerrain
+from drone_sim.planning.pathfinding import AStarPathfinder, NoPathError
 
 class RoutePlanner:
     def __init__(self, start_position, goal_position, ground_height, minimum_clearance, waypoint_spacing,
@@ -46,6 +46,10 @@ class RoutePlanner:
 
         if self.start_position[2] < self.get_ground_height(self.start_position[0], self.start_position[1]):
             raise ValueError("Start position cannot be below ground.")
+        if isinstance(self.terrain, RoomTerrain):
+            for point in (self.start_position, self.goal_position):
+                if not self.terrain.segment_xy_is_clear(point[:2], point[:2], self.terrain.route_margin):
+                    raise NoPathError("Start or goal is inside a red no-go zone or its route margin.")
 
 
     def get_ground_height(self, x, y):
@@ -140,6 +144,9 @@ class RoutePlanner:
 
             cruise_route = np.asarray(simplified)
         else:
+            if isinstance(self.terrain, RoomTerrain) and not self.terrain.segment_xy_is_clear(
+                    self.start_position[:2], self.goal_position[:2], self.terrain.route_margin):
+                raise NoPathError("Straight route crosses a red no-go zone; use A* to detour.")
             altitude = max(self.start_position[2], self.goal_position[2],
                            self.terrain.maximum_height_along(self.start_position[:2], self.goal_position[:2])
                            + self.minimum_clearance)

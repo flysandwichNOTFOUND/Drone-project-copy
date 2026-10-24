@@ -11,17 +11,17 @@ from drone_sim.world.environment import BasicEnvironment
 from drone_sim.control.navigation import PathFollower
 from drone_sim.planning.routeplanner import RoutePlanner
 from drone_sim.validation import positive, vector
-from drone_sim.world.terrain import FlatTerrain, HillTerrain, SlopedTerrain, LandscapeTerrain
+from drone_sim.world.terrain import RoomTerrain
 from drone_sim.control.landing import LandingController
 
 TARGET_YAW = 0
 MINIMUM_FLIGHT_ALTITUDE = 2.0     # metres in world Z; terrain clearance can require a higher altitude
-TARGET_X = 80
-TARGET_Y = 90
+TARGET_X = -8.75
+TARGET_Y = 5
 
 # MODE SELECTION
 ROUTE_PLANNING_MODE = "astar"     # "astar" or "straight"
-TERRAIN_MODE = "landscape"  # "flat", "hill", "slope", "landscape"
+TERRAIN_MODE = "room"
 WIND_MODE = "none"  #"none", "constant", "gust"
 LANDING_MODE = "safe_nearby"  # "strict", "safe_nearby", "exact"
 
@@ -36,20 +36,11 @@ def current_gains():
 
 
 def create_terrain():
-
-    if TERRAIN_MODE == "landscape":
-        return LandscapeTerrain(parameters.GROUND_HEIGHT, parameters.TERRAIN_SEED)
-
-    if TERRAIN_MODE == "flat":
-        return FlatTerrain(parameters.GROUND_HEIGHT)
-
-    if TERRAIN_MODE == "hill":
-        return HillTerrain(parameters.GROUND_HEIGHT, parameters.HILL_CENTER, parameters.HILL_HEIGHT, parameters.HILL_WIDTH)
-
-    if TERRAIN_MODE == "slope":
-        return SlopedTerrain(parameters.GROUND_HEIGHT, parameters.TERRAIN_SLOPE)
-
-    raise ValueError("TERRAIN_MODE must be flat, hill, slope, or landscape.")
+    return RoomTerrain(
+        parameters.GROUND_HEIGHT, parameters.ROOM_WIDTH, parameters.ROOM_LENGTH,
+        parameters.ROOM_WALL_HEIGHT, parameters.ROOM_WALL_THICKNESS,
+        parameters.PILLAR_CENTER, parameters.PILLAR_WIDTH, parameters.PILLAR_HEIGHT,
+        parameters.MINIMUM_WALL_DISTANCE)
 
 
 def create_drone(terrain = None):

@@ -1,7 +1,6 @@
 # Tested runtime: Python 3.10 (including Windows).
 numpy==2.2.6
 matplotlib==3.10.9
-perlin-noise==1.14
 
 # Required by the default compare mode and the Gym/PyBullet backend.
 pybullet==3.2.5

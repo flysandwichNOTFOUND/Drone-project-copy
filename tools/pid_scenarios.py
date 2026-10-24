@@ -5,7 +5,7 @@ import numpy as np
 from drone_sim import main as mission
 from drone_sim.configuration import parameters
 from drone_sim.world.environment import BasicEnvironment
-from drone_sim.world.terrain import FlatTerrain, HillTerrain, LandscapeTerrain
+from drone_sim.world.terrain import FlatTerrain, HillTerrain
 
 
 @dataclass(frozen = True)
@@ -23,20 +23,20 @@ class Scenario:
 TRAINING_SCENARIOS = (
     Scenario("train_flat", "flat", 11, (2.0, 0.0)),
     Scenario("train_hill_wind", "hill", 12, (1.0, 1.5), 30, "constant", (0.4, -0.2, 0.0)),
-    Scenario("train_landscape", "landscape", 13, (-1.5, 1.0), -30),
+    Scenario("train_room", "room", 13, (-1.5, 1.0), -30),
 )
 
 VALIDATION_SCENARIOS = (
     Scenario("holdout_flat_gust", "flat", 101, (-1.0, -2.0), 90, "gust", (-0.3, 0.4, 0.0)),
     Scenario("holdout_hill", "hill", 102, (2.0, -1.0), -60),
-    Scenario("holdout_landscape_wind", "landscape", 103, (1.5, -1.5), 45, "constant", (-0.3, 0.2, 0.0)),
+    Scenario("holdout_room_wind", "room", 103, (1.5, -1.5), 45, "constant", (-0.3, 0.2, 0.0)),
 )
 
 
 def terrain_for(scenario):
 
-    if scenario.terrain == "landscape":
-        return LandscapeTerrain(seed = scenario.seed)
+    if scenario.terrain == "room":
+        return mission.create_terrain()
     if scenario.terrain == "hill":
         rng = np.random.default_rng(scenario.seed)
         return HillTerrain(center = tuple(rng.uniform(-1, 1, 2)), height = float(rng.uniform(0.4, 0.9)), width = 2.0)

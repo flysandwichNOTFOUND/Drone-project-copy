@@ -123,16 +123,16 @@ LANDING_MAX_JERK = 0.5            # m/s³
 # TERRAIN
 # ============================================================
 
-TERRAIN_SEED = 17
-TERRAIN_BOUNDS = (-100.0, 100.0, -100.0, 100.0) 
-
-#noise configuration
-LANDSCAPE_HEIGHT = 18.0          #scales noise variation, not an absolute maximum
-LANDSCAPE_FEATURE_SIZE = 60.0    #width of the largest noise cells
-LANDSCAPE_OCTAVES = 4            # noise layers
-LANDSCAPE_PERSISTENCE = 0.3      # amplitude multiplier 
-LANDSCAPE_LACUNARITY = 2.0       # frequency multiplier
-LANDSCAPE_RESOLUTION = 1.0       #cached height-map spacing
+ROOM_WIDTH = 20.0               # clear interior, metres
+ROOM_LENGTH = 20.0
+ROOM_WALL_HEIGHT = 4.0
+ROOM_WALL_THICKNESS = 0.2        # extends outside the interior footprint
+MINIMUM_WALL_DISTANCE = 1.0      # metres; red wall-clearance zone in plots
+PILLAR_CENTER = (-2.5, 2.5)
+PILLAR_WIDTH = 0.5              # square cross-section, metres
+PILLAR_HEIGHT = 4.0
+TERRAIN_BOUNDS = (-ROOM_WIDTH / 2, ROOM_WIDTH / 2,
+                  -ROOM_LENGTH / 2, ROOM_LENGTH / 2)
 
 HILL_CENTER = np.array([5.0, 4.0])
 
