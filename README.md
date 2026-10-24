@@ -26,11 +26,13 @@ comparisons and generated outputs have been removed.
 
 ## Run the scaffold
 
-Use Python 3.10 or newer:
+Use the same Python 3.10 Conda environment as the original project. Both local
+VS Code workspaces select `C:\Users\frank\conda-envs\drone-sim\python.exe`.
+From the copy folder, run:
 
 ```powershell
-python -m pip install -r requirements.txt
-python -m drone_sim.main
+& 'C:\Users\frank\conda-envs\drone-sim\python.exe' -m pip install -r requirements.txt
+& 'C:\Users\frank\conda-envs\drone-sim\python.exe' -m drone_sim.main
 ```
 
 Only the configuration records and PyBullet lifecycle have basic implementations.
