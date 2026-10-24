@@ -376,6 +376,21 @@ class GymPyBulletDrone:
                               for centre, half_extents in room.wall_boxes()]
         self.pillar_body_ids = [box(centre, half_extents, (0.4, 0.4, 0.45, 1.0))
                                for centre, half_extents in room.pillar_boxes()]
+        self.outlet_body_ids = []
+        for outlet in room.outlets:
+            normal = np.asarray(outlet.inward_normal, dtype = float)
+            centre = np.asarray(outlet.position) + normal * 0.02
+            half_extents = (0.02, 0.06, 0.09) if normal[0] else (0.06, 0.02, 0.09)
+            self.outlet_body_ids.append(box(centre, half_extents, (0.95, 0.95, 0.9, 1.0)))
+            # Dark vertical socket slots on the inward-facing plate surface.
+            tangent = np.array([-normal[1], normal[0], 0.0])
+            for offset in (-0.02, 0.02):
+                slot_centre = np.asarray(outlet.position) + normal * 0.041 + tangent * offset
+                slot_extents = (0.001, 0.005, 0.02) if normal[0] else (0.005, 0.001, 0.02)
+                visual = p.createVisualShape(p.GEOM_BOX, halfExtents = slot_extents,
+                    rgbaColor = (0.05, 0.05, 0.05, 1.0), physicsClientId = self.client_id)
+                p.createMultiBody(baseMass = 0, baseVisualShapeIndex = visual,
+                    basePosition = slot_centre, physicsClientId = self.client_id)
         self.env.PLANE_ID = self.terrain_body_id
 
 

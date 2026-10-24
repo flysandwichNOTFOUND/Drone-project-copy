@@ -1,6 +1,8 @@
 # Tested runtime: Python 3.10 (including Windows).
 numpy==2.2.6
 matplotlib==3.10.9
+opencv-python==5.0.0.93
+httpx==0.28.1
 
 # Required by the default compare mode and the Gym/PyBullet backend.
 pybullet==3.2.5

@@ -89,7 +89,7 @@ class RoomTerrain(FlatTerrain):
     def __init__(self, base_height = 0.0, width = 20.0, length = 20.0,
                  wall_height = 4.0, wall_thickness = 0.2,
                  pillar_center = (-2.5, 2.5), pillar_width = 0.5, pillar_height = 4.0,
-                 minimum_safe_distance = 1.0, route_margin = 0.1):
+                 minimum_safe_distance = 1.0, route_margin = 0.1, outlet_specs = ()):
         super().__init__(base_height)
         self.width = positive(width, "Room width")
         self.length = positive(length, "Room length")
@@ -105,6 +105,8 @@ class RoomTerrain(FlatTerrain):
         if np.any(np.abs(self.pillar_center) + self.pillar_width / 2
                   >= np.array([self.width, self.length]) / 2):
             raise ValueError("Pillar must fit inside the room.")
+        from drone_sim.world.outlets import create_wall_outlets
+        self.outlets = create_wall_outlets(self, outlet_specs)
 
     def blocked_pillar_bounds(self, extra_clearance = 0.0):
         """Pillar footprints expanded by the red zone and optional route margin."""

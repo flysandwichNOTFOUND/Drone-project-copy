@@ -25,6 +25,13 @@ def close_all():
 def landing_label(simulation_data):
     """Describe the landing mode and any selected nearby destination."""
 
+    if "outlet_inspections" in simulation_data:
+        completed = sum(item["completed"] for item in simulation_data["outlet_inspections"])
+        home_status = "landed at start" if simulation_data.get("return_complete") else "not complete"
+        return (f"Physics backend: {simulation_data['physics_backend']}\n"
+                f"Outlet inspections: {completed}/3 — return home: {home_status}\n"
+                f"Maximum inspection range: {simulation_data['inspection_range']:g} m")
+
     mode = simulation_data.get("landing_mode", "unspecified")
     label = f"Landing mode: {mode if mode is not None else 'disabled'}"
     if "physics_backend" in simulation_data:
@@ -42,6 +49,10 @@ def mark_flight_stages(axes, stage_start_times):
 
     colors = {"climbing": "#567a35", "flying": "#206593",
               "landing": "#aa6632", "landed": "#656565"}
+    colors.update({f"mission_{i}": colour for i, colour in
+                   enumerate(("tab:orange", "tab:green", "tab:purple"), start = 1)})
+    colors.update({f"inspect_{i}": "#656565" for i in range(1, 4)})
+    colors["return_home"] = "tab:brown"
     events = [(stage, time) for stage, time in stage_start_times.items() if stage in colors]
 
     for ax in axes:
@@ -205,6 +216,50 @@ def _room_safety_rectangles(terrain, simulation_data):
              f"Slow down: next {CollisionCheck.SLOWDOWN_THRESHOLD:g} m")]
 
 
+def _plot_outlet_missions(ax, simulation_data, is_3d = False):
+    """Show wall outlets, their viewpoints and each independent planned leg."""
+    terrain = simulation_data["terrain"]
+    for index, outlet in enumerate(getattr(terrain, "outlets", ())):
+        point = np.asarray(outlet.position)
+        coordinates = point if is_3d else point[:2]
+        ax.scatter(*coordinates, color = "deepskyblue", edgecolors = "black", marker = "s",
+                   s = 65, zorder = 6, clip_on = False,
+                   label = "Wall power outlet" if index == 0 else None)
+        normal = np.asarray(outlet.inward_normal)
+        if is_3d:
+            label_point = point + normal * 0.3 + [0, 0, 0.15]
+            ax.text(*label_point, f"O{index + 1}", fontsize = 8, zorder = 6)
+        else:
+            ax.annotate(f"O{index + 1}", coordinates,
+                        xytext = (normal[0] * 24, normal[1] * 24 + (8 if normal[1] == 0 else 0)),
+                        textcoords = "offset points", ha = "center", fontsize = 8)
+
+    missions = simulation_data.get("outlet_inspections", [])
+    for index, mission in enumerate(missions):
+        colour = ("tab:orange", "tab:green", "tab:purple")[index % 3]
+        path = np.asarray(mission["planned_waypoints"])
+        coordinates = path.T if is_3d else path[:, :2].T
+        ax.plot(*coordinates, color = colour, linestyle = "--", linewidth = 1.5,
+                label = f"A* mission {mission['mission_id']}")
+        point = np.asarray(mission["inspection_point"])
+        coordinates = point if is_3d else point[:2]
+        ax.scatter(*coordinates, color = colour, marker = "D", s = 40, zorder = 5,
+                   label = "Inspection viewpoint" if index == 0 else None)
+        connector = np.vstack((point, mission["outlet_position"]))
+        ax.plot(*(connector.T if is_3d else connector[:, :2].T),
+                color = colour, linestyle = ":", linewidth = 1, alpha = 0.8)
+    return_mission = simulation_data.get("return_mission")
+    if return_mission is not None:
+        path = np.asarray(return_mission["planned_waypoints"])
+        ax.plot(*(path.T if is_3d else path[:, :2].T), color = "tab:brown",
+                linestyle = "--", linewidth = 1.5, label = "A* return home")
+    if "home_position" in simulation_data:
+        home = np.asarray(simulation_data["home_position"])
+        ax.scatter(*(home if is_3d else home[:2]), color = "black", marker = "P",
+                   s = 75, zorder = 6, label = "Takeoff / return point")
+    return bool(missions)
+
+
 def plot_3d_trajectory(simulation_data, *, show = True):
 
     ground_height = simulation_data["ground_height"]
@@ -278,7 +333,8 @@ def plot_3d_trajectory(simulation_data, *, show = True):
 
     ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], color = "tab:blue", label = "Actual trajectory")
     adapted = simulation_data.get("landing_mode") == "safe_nearby"
-    ax.plot(waypoints[:, 0], waypoints[:, 1], waypoints[:, 2], color = "tab:orange", linestyle = "--", marker = "o", label = "Adapted planned route" if adapted else "Planned route")
+    if not _plot_outlet_missions(ax, simulation_data, is_3d = True):
+        ax.plot(waypoints[:, 0], waypoints[:, 1], waypoints[:, 2], color = "tab:orange", linestyle = "--", marker = "o", label = "Adapted planned route" if adapted else "Planned route")
 
     if requested_route is not None:
         ax.plot(requested_route[:, 0], requested_route[:, 1], requested_route[:, 2], color = "tab:purple", linestyle = ":", linewidth = 2, label = "Requested route (comparison only)")
@@ -331,7 +387,8 @@ def plot_2d_trajectory(simulation_data, *, show = True):
     figure, ax = plt.subplots(figsize = (9, 8))
     figure.suptitle(landing_label(simulation_data), fontsize = 13)
     ax.plot(positions[:, 0], positions[:, 1], color = "tab:blue", label = "Actual trajectory")
-    ax.plot(waypoints[:, 0], waypoints[:, 1], color = "tab:orange", linestyle = "--", label = "Adapted planned route" if adapted else "Planned route")
+    if not _plot_outlet_missions(ax, simulation_data):
+        ax.plot(waypoints[:, 0], waypoints[:, 1], color = "tab:orange", linestyle = "--", label = "Adapted planned route" if adapted else "Planned route")
     requested_route = simulation_data.get("requested_waypoints") if adapted else None
 
     if requested_route is not None:

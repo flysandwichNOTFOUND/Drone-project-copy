@@ -40,7 +40,7 @@ def create_terrain():
         parameters.GROUND_HEIGHT, parameters.ROOM_WIDTH, parameters.ROOM_LENGTH,
         parameters.ROOM_WALL_HEIGHT, parameters.ROOM_WALL_THICKNESS,
         parameters.PILLAR_CENTER, parameters.PILLAR_WIDTH, parameters.PILLAR_HEIGHT,
-        parameters.MINIMUM_WALL_DISTANCE)
+        parameters.MINIMUM_WALL_DISTANCE, outlet_specs = parameters.OUTLET_LOCATIONS)
 
 
 def create_drone(terrain = None):
@@ -123,7 +123,9 @@ def run_simulation(gains = None, duration = None, include_landing = None, verbos
             close()
 
 
-def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, terrain, goal_position, initial_state, environment, step_observer):
+def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, terrain, goal_position, initial_state, environment, step_observer,
+                 initialize_drone = True, arrival_check = None, arrival_wait_time = None,
+                 route_planning_mode = None, landing_mode = None):
 
     include_landing = parameters.INCLUDE_LANDING if include_landing is None else include_landing
     target_yaw = np.radians(TARGET_YAW) if target_yaw is None else target_yaw
@@ -133,7 +135,10 @@ def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, t
         if duration < parameters.DT:
             raise ValueError("Simulation duration must include at least one time step.")
 
-    arrival_wait = positive(parameters.ARRIVAL_WAIT_TIME, "Arrival wait time", allow_zero = True)
+    arrival_wait = positive(parameters.ARRIVAL_WAIT_TIME if arrival_wait_time is None else arrival_wait_time,
+                            "Arrival wait time", allow_zero = True)
+    route_planning_mode = ROUTE_PLANNING_MODE if route_planning_mode is None else route_planning_mode
+    landing_mode = LANDING_MODE if landing_mode is None else landing_mode
 
     if not np.isfinite(target_yaw):
         raise ValueError("Target yaw must be finite.")
@@ -147,13 +152,14 @@ def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, t
     if initial_state is None:
         state.position[:] = drone.initial_position
 
-    drone.reset(state)
+    if initialize_drone:
+        drone.reset(state)
 
     landing_controller = (LandingController(
         terrain, goal[:2], parameters.LANDING_DESCENT_SPEED, parameters.LANDING_FLARE_SPEED,
         parameters.LANDING_FLARE_HEIGHT, speed_tolerance = parameters.SPEED_TOLERANCE,
         max_slope_degrees = parameters.MAX_LANDING_SLOPE_DEGREES,
-        footprint_radius = parameters.ARM_LENGTH, mode = LANDING_MODE,
+        footprint_radius = parameters.ARM_LENGTH, mode = landing_mode,
         search_radius = parameters.LANDING_SEARCH_RADIUS,
         search_resolution = parameters.LANDING_SEARCH_RESOLUTION,
         max_acceleration = parameters.LANDING_MAX_ACCELERATION,
@@ -200,21 +206,21 @@ def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, t
     arrival_time = None
     stop_reason = None
 
-    if ROUTE_PLANNING_MODE not in ("astar", "straight"):
+    if route_planning_mode not in ("astar", "straight"):
         raise ValueError("ROUTE_PLANNING_MODE must be astar or straight.")
 
     route_planner = RoutePlanner(
         start_position = state.position.copy(), goal_position = goal,
         ground_height = parameters.GROUND_HEIGHT, minimum_clearance = parameters.MINIMUM_CLEARANCE,
         waypoint_spacing = parameters.WAYPOINT_SPACING, terrain = terrain,
-        use_astar = ROUTE_PLANNING_MODE == "astar", grid_resolution = parameters.ASTAR_GRID_RESOLUTION,
+        use_astar = route_planning_mode == "astar", grid_resolution = parameters.ASTAR_GRID_RESOLUTION,
         search_margin = parameters.ASTAR_SEARCH_MARGIN, climb_weight = parameters.ASTAR_CLIMB_WEIGHT,
         maximum_altitude = parameters.ASTAR_MAXIMUM_ALTITUDE, clearance_margin = parameters.ASTAR_CLEARANCE_MARGIN)
     waypoints = route_planner.generate_route(include_landing = include_landing)
     requested_waypoints = None
     requested_route_error = None
 
-    if include_landing and LANDING_MODE == "safe_nearby":
+    if include_landing and landing_mode == "safe_nearby":
         requested_planner = copy(route_planner)
         requested_planner.goal_position = requested_goal.copy()
 
@@ -320,6 +326,8 @@ def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, t
             break
 
         arrived = landed if include_landing else navigation.mission_complete and navigation.check_arrival(state)
+        if arrival_check is not None:
+            arrived = arrived and bool(arrival_check(state))
         if arrived:
             if arrival_time is None:
                 arrival_time = recorded_time
@@ -372,10 +380,10 @@ def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, t
         "waypoint_index": waypoint_index_history,
         "distance_to_target": distance_to_target_history,
         "waypoints": np.asarray(waypoints, dtype = float),
-        "route_planning_mode": ROUTE_PLANNING_MODE,
+        "route_planning_mode": route_planning_mode,
         "mission_complete": navigation.mission_complete,
         "landed": landed,
-        "landing_mode": LANDING_MODE if landing_controller is not None else None,
+        "landing_mode": landing_mode if landing_controller is not None else None,
         "requested_destination": requested_goal.copy(),
         "requested_waypoints": requested_waypoints,
         "requested_route_error": requested_route_error,
@@ -386,10 +394,10 @@ def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, t
     if verbose:
         print("Simulation complete")
         print("Physics backend: gym_pybullet")
-        print(f'ROUTE_PLANNING_MODE = "{ROUTE_PLANNING_MODE}"')
+        print(f'ROUTE_PLANNING_MODE = "{route_planning_mode}"')
         print(f'TERRAIN_MODE = "{TERRAIN_MODE}"')
         print(f'WIND_MODE = "{WIND_MODE}"')
-        print(f'LANDING_MODE = "{LANDING_MODE}"')
+        print(f'LANDING_MODE = "{landing_mode}"')
         print(f"Final location (x, y, z): {np.array2string(state.position, precision = 3)} m")
         print(f"Mission complete: {navigation.mission_complete}")
 
@@ -399,7 +407,8 @@ def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, t
 if __name__ == "__main__":
     from drone_sim.visualization import plotting
     plotting.use_backend("Agg")
-    final_state, simulation_data = run_simulation()
+    from drone_sim.inspection import run_outlet_inspections
+    final_state, simulation_data = run_outlet_inspections()
     plotting.plot_data(simulation_data, show = False)
     plotting.plot_3d_trajectory(simulation_data, show = False)
     plotting.plot_2d_trajectory(simulation_data, show = False)

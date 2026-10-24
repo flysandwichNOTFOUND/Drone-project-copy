@@ -131,6 +131,11 @@ MINIMUM_WALL_DISTANCE = 1.0      # metres; red wall-clearance zone in plots
 PILLAR_CENTER = (-2.5, 2.5)
 PILLAR_WIDTH = 0.5              # square cross-section, metres
 PILLAR_HEIGHT = 4.0
+OUTLET_LOCATIONS = (("west", 5.0, 1.2), ("east", -5.0, 1.2), ("north", 4.0, 1.2))
+OUTLET_INSPECTION_RANGE = 1.75    # maximum 3D distance to the outlet, metres
+OUTLET_INSPECTION_STANDOFF = 1.25
+OUTLET_INSPECTION_HEIGHT = 2.25
+OUTLET_INSPECTION_HOLD_TIME = 2.0
 TERRAIN_BOUNDS = (-ROOM_WIDTH / 2, ROOM_WIDTH / 2,
                   -ROOM_LENGTH / 2, ROOM_LENGTH / 2)
 
