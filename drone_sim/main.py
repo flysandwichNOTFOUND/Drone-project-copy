@@ -4,7 +4,8 @@ from itertools import count
 from drone_sim.configuration import parameters
 from drone_sim.planning.pathfinding import NoPathError
 
-from drone_sim.physics.dynamics import Drone, DroneState
+from drone_sim.physics.dynamics import DroneState
+from drone_sim.physics.gym_banckend_dynamics import GymPyBulletDrone
 from drone_sim.control.controllerV1 import HeightPIDController, OrientationPIDController, PositionPIDController
 from drone_sim.world.environment import BasicEnvironment
 from drone_sim.control.navigation import PathFollower
@@ -19,7 +20,6 @@ TARGET_X = 80
 TARGET_Y = 90
 
 # MODE SELECTION
-PHYSICS_BACKEND = "compare"      # "simulation", "gym_pybullet", or "compare"
 ROUTE_PLANNING_MODE = "astar"     # "astar" or "straight"
 TERRAIN_MODE = "landscape"  # "flat", "hill", "slope", "landscape"
 WIND_MODE = "none"  #"none", "constant", "gust"
@@ -52,29 +52,12 @@ def create_terrain():
     raise ValueError("TERRAIN_MODE must be flat, hill, slope, or landscape.")
 
 
-def create_drone(terrain = None, physics_backend = None):
-    """Input: optional terrain. Output: selected physics backend.
+def create_drone(terrain = None):
+    """Create the Gym/PyBullet drone using the shared mission parameters."""
 
-    Source: PHYSICS_BACKEND above and drone properties in parameters.py.
-    Caller: run_simulation(), tuning tools, and tests.
-    """
-
-    physics_backend = PHYSICS_BACKEND if physics_backend is None else physics_backend
-
-    if physics_backend not in ("simulation", "gym_pybullet"):
-        raise ValueError("A single drone requires simulation or gym_pybullet; use run_simulation() for compare.")
-
-    if physics_backend == "gym_pybullet":
-        from drone_sim.physics.gym_banckend_dynamics import GymPyBulletDrone
-
-        return GymPyBulletDrone(
-            config = parameters,
-            terrain = create_terrain() if terrain is None else terrain)
-
-    return Drone(parameters.TOTAL_MASS, parameters.ARM_LENGTH, parameters.MAX_THRUST_PER_MOTOR,
-                 parameters.MOMENT_OF_INERTIA, parameters.THRUST_COEFFICIENT, parameters.TORQUE_COEFFICIENT,
-                 gravity = parameters.GRAVITY, ground_height = parameters.GROUND_HEIGHT,
-                 terrain = create_terrain() if terrain is None else terrain)
+    return GymPyBulletDrone(
+        config = parameters,
+        terrain = create_terrain() if terrain is None else terrain)
 
 
 def create_controllers(gains = None):
@@ -130,31 +113,18 @@ def control_step(drone, state, controllers, environment, target_height,
 
 
 def run_simulation(gains = None, duration = None, include_landing = None, verbose = True,
-                   target_yaw = None, terrain = None, goal_position = None, physics_backend = None, initial_state = None, environment = None, step_observer = None):
-    """Run one mission, or return (final_states, comparison_data) in compare mode.
+                   target_yaw = None, terrain = None, goal_position = None, initial_state = None, environment = None, step_observer = None):
+    """Run one mission using Gym/PyBullet physics.
 
     Each invocation creates fresh controllers, navigation, wind and histories.
     Owned physics resources are closed even when a mission fails.
     """
 
-    physics_backend = PHYSICS_BACKEND if physics_backend is None else physics_backend
-
-    if physics_backend == "compare":
-        if step_observer is not None:
-            raise ValueError("An external step observer requires a single physics backend.")
-        from drone_sim.physics.comparison import run_comparison
-
-        comparison_data = run_comparison(
-            duration = duration, gains = gains, include_landing = include_landing,
-            verbose = verbose, target_yaw = target_yaw, terrain = terrain,
-            goal_position = goal_position, initial_state = initial_state, environment = environment)
-        return comparison_data["final_states"], comparison_data
-
     terrain = create_terrain() if terrain is None else terrain
-    drone = create_drone(terrain, physics_backend = physics_backend)
+    drone = create_drone(terrain)
 
     try:
-        return _run_mission(drone, physics_backend, gains, duration, include_landing, verbose, target_yaw, terrain, goal_position, initial_state, environment, step_observer)
+        return _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, terrain, goal_position, initial_state, environment, step_observer)
     finally:
         close = getattr(drone, "close", None)
 
@@ -162,7 +132,7 @@ def run_simulation(gains = None, duration = None, include_landing = None, verbos
             close()
 
 
-def _run_mission(drone, physics_backend, gains, duration, include_landing, verbose, target_yaw, terrain, goal_position, initial_state, environment, step_observer):
+def _run_mission(drone, gains, duration, include_landing, verbose, target_yaw, terrain, goal_position, initial_state, environment, step_observer):
 
     include_landing = parameters.INCLUDE_LANDING if include_landing is None else include_landing
     target_yaw = np.radians(TARGET_YAW) if target_yaw is None else target_yaw
@@ -184,13 +154,9 @@ def _run_mission(drone, physics_backend, gains, duration, include_landing, verbo
     state = DroneState() if initial_state is None else initial_state.copy()
 
     if initial_state is None:
-        state.position[2] = drone.get_ground_height(*state.position[:2])
+        state.position[:] = drone.initial_position
 
-        if physics_backend == "gym_pybullet":
-            state.position[:] = drone.initial_position
-
-    if physics_backend == "gym_pybullet":
-        drone.reset(state)
+    drone.reset(state)
 
     landing_controller = (LandingController(
         terrain, goal[:2], parameters.LANDING_DESCENT_SPEED, parameters.LANDING_FLARE_SPEED,
@@ -374,7 +340,7 @@ def _run_mission(drone, physics_backend, gains, duration, include_landing, verbo
 
     # Put all recorded information into one dictionary
     simulation_data = {
-        "physics_backend": physics_backend,
+        "physics_backend": "gym_pybullet",
         "stop_reason": stop_reason,
         "arrival_time": arrival_time,
         "arrival_wait_time": arrival_wait,
@@ -428,7 +394,7 @@ def _run_mission(drone, physics_backend, gains, duration, include_landing, verbo
 
     if verbose:
         print("Simulation complete")
-        print(f'PHYSICS_BACKEND = "{physics_backend}"')
+        print("Physics backend: gym_pybullet")
         print(f'ROUTE_PLANNING_MODE = "{ROUTE_PLANNING_MODE}"')
         print(f'TERRAIN_MODE = "{TERRAIN_MODE}"')
         print(f'WIND_MODE = "{WIND_MODE}"')
@@ -443,10 +409,7 @@ if __name__ == "__main__":
     from drone_sim.visualization import plotting
     plotting.use_backend("Agg")
     final_state, simulation_data = run_simulation()
-    # Refresh the terrain preview in compare mode too. Until combined graphs
-    # are added, show the simulation run and retain both histories in memory.
-    graph_data = simulation_data["simulation"] if PHYSICS_BACKEND == "compare" else simulation_data
-    plotting.plot_data(graph_data, show = False)
-    plotting.plot_3d_trajectory(graph_data, show = False)
-    plotting.plot_2d_trajectory(graph_data, show = False)
+    plotting.plot_data(simulation_data, show = False)
+    plotting.plot_3d_trajectory(simulation_data, show = False)
+    plotting.plot_2d_trajectory(simulation_data, show = False)
     plotting.close_all()
